@@ -80,42 +80,60 @@ function writeBack() {
 
 // ---------- three.js viewport ----------
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(devicePixelRatio);
-renderer.setClearColor(0x16181d);
+renderer.setClearColor(0x000000, 0);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 1, 0.5, 1e5);
 camera.up.set(0, 0, 1); camera.position.set(160, -200, 140);
 const controls = new OrbitControls(camera, canvas);
 controls.addEventListener('change', render);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x555566, 1.6));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa0aa, 2.2));
 const sun = new THREE.DirectionalLight(0xffffff, 1.8); camera.add(sun); sun.position.set(1, 2, 3); scene.add(camera);
-const grid = new THREE.GridHelper(400, 40, 0x3a4150, 0x262a33); grid.rotation.x = Math.PI / 2; scene.add(grid);
+const grid = new THREE.GridHelper(400, 40, 0xc3c9d1, 0xe2e5ea); grid.rotation.x = Math.PI / 2; scene.add(grid);
 scene.add(new THREE.AxesHelper(30));
 const bodyG = new THREE.Group(), sketchG = new THREE.Group(), hlG = new THREE.Group(), selG = new THREE.Group(), markG = new THREE.Group(), draftG = new THREE.Group();
 scene.add(bodyG, sketchG, selG, hlG, markG, draftG);
+// default planes (Top / Front / Right), selectable from the feature list
+const planeG = new THREE.Group(); scene.add(planeG);
+const PLANES = { Top: ['XY', [1, 0, 0], [0, 1, 0]], Front: ['XZ', [1, 0, 0], [0, 0, 1]], Right: ['YZ', [0, 1, 0], [0, 0, 1]] };
+function drawPlanes() {
+  clear(planeG); if (isAsm()) return;
+  for (const [pl, u, v] of Object.values(PLANES)) {
+    const c = [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]].map(([a, b]) => [0, 1, 2].map((i) => (u[i] * a + v[i] * b) * 35));
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(c.flat(), 3));
+    planeG.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: S.plane === pl ? 0xe8890c : 0x9aa7b5 })));
+  }
+}
+// view cube: CSS 3D faces that follow the camera; click a face to look at it
+const CUBE = { Top: [[0, 0, 1], [1, 0, 0], [0, 1, 0]], Bottom: [[0, 0, -1], [1, 0, 0], [0, -1, 0]], Front: [[0, -1, 0], [1, 0, 0], [0, 0, 1]], Back: [[0, 1, 0], [-1, 0, 0], [0, 0, 1]], Right: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], Left: [[-1, 0, 0], [0, -1, 0], [0, 0, 1]] };
+const cubeFaces = Object.entries(CUBE).map(([name, [n, u, v]]) => { const el = h('div', { class: 'cf', onclick: () => view(n, name === 'Top' ? [0, 1, 0] : name === 'Bottom' ? [0, -1, 0] : [0, 0, 1]) }, name); $('cube').append(el); return { el, n, u, v }; });
+function updateCube() {
+  const e = camera.matrixWorldInverse.elements, C = (w) => [e[0] * w[0] + e[4] * w[1] + e[8] * w[2], -(e[1] * w[0] + e[5] * w[1] + e[9] * w[2]), e[2] * w[0] + e[6] * w[1] + e[10] * w[2]];
+  for (const f of cubeFaces) { const z = C(f.n); f.el.style.transform = `matrix3d(${C(f.u)},0,${C(f.v.map((c) => -c))},0,${z},0,${z.map((c) => c * 26)},1)`; }
+}
 const clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
-function render() { renderer.render(scene, camera); }
+function render() { renderer.render(scene, camera); updateCube(); }
 function resize() { const r = canvas.parentElement.getBoundingClientRect(); renderer.setSize(r.width, r.height, false); camera.aspect = r.width / r.height; camera.updateProjectionMatrix(); render(); }
 new ResizeObserver(resize).observe(canvas.parentElement);
 
-const PALETTE = ['#8fa3b8', '#c9a26b', '#7fb58a', '#b58fb8', '#b8a08f', '#8fb8b5', '#b88f8f', '#a3a86e'];
+const PALETTE = ['#d3d7dd', '#9dbde6', '#d9b38f', '#9fcf9f', '#cf9fbf', '#d9d08f', '#8fcfcf', '#cf9f9f'];
 const clear = (g) => { for (const c of [...g.children]) { c.geometry?.dispose(); g.remove(c); } };
 const dots = (group, pts, color, size) => { if (!pts.length) return; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3)); group.add(new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }))); };
 const mApply = (M, p) => [0, 1, 2].map((i) => M[i][0] * p[0] + M[i][1] * p[1] + M[i][2] * p[2] + M[i][3]);
 const mInv = (M, p) => { const d = p.map((c, i) => c - M[i][3]); return [0, 1, 2].map((i) => M[0][i] * d[0] + M[1][i] * d[1] + M[2][i] * d[2]); };
 function drawScene() {
-  clear(bodyG); clear(sketchG); clear(markG); clear(selG); clear(hlG);
+  clear(bodyG); clear(sketchG); clear(markG); clear(selG); clear(hlG); drawPlanes();
   (S.res?.bodies || []).forEach((b, i) => {
     if (!b.mesh || b.hidden || S.hidden.has(b.name)) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(b.mesh.vertices, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(b.mesh.normals, 3));
     geo.setIndex(new THREE.BufferAttribute(b.mesh.triangles, 1));
-    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: b.color || PALETTE[i % PALETTE.length], metalness: 0.15, roughness: 0.55, side: THREE.DoubleSide, transparent: b.opacity < 1 || !!S.sketch, opacity: S.sketch ? Math.min(b.opacity, 0.45) : b.opacity, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: b.color || PALETTE[i % PALETTE.length], metalness: 0.05, roughness: 0.7, side: THREE.DoubleSide, transparent: b.opacity < 1 || !!S.sketch, opacity: S.sketch ? Math.min(b.opacity, 0.45) : b.opacity, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
     mesh.userData = { body: b, kind: 'face' };
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(b.mesh.lines, 3));
-    const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x0c0d10 }));
+    const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x23272d }));
     lines.userData = { body: b, kind: 'edge' };
     bodyG.add(mesh, lines);
   });
@@ -123,10 +141,10 @@ function drawScene() {
   for (const [id, sk] of Object.entries(S.res?.sketches || {})) {
     const active = id === S.sketch;
     if (!active && id !== S.sel && used.has(id)) continue;
-    sk.entities.forEach((e, i) => addPoly(sketchG, sk.frame, entPts(e), !active ? 0x5a7fa8 : S.skSel.some((r) => r[0] === i && r[1] === 'e') ? 0xffb84f : e.mode === 'cut' ? 0xff8f6b : 0x6bd0ff));
+    sk.entities.forEach((e, i) => addPoly(sketchG, sk.frame, entPts(e), !active ? 0x7d8fa3 : S.skSel.some((r) => r[0] === i && r[1] === 'e') ? 0xffb84f : e.mode === 'cut' ? 0xd9480f : 0x1565c0));
     if (active) {
       const P = (r) => to3(sk.frame, pointOf(sk.entities, r));
-      dots(markG, listPoints(sk.entities).map(P), 0xcfe8ff, 6);
+      dots(markG, listPoints(sk.entities).map(P), 0x1c1f24, 6);
       dots(markG, S.skSel.filter((r) => r[1] !== 'e').map(P), 0xffb84f, 12);
     }
   }
@@ -298,7 +316,7 @@ function finishPath(closed) {
 function preview(p) {
   clear(draftG);
   const fr = S.res?.sketches[S.sketch]?.frame;
-  if (draft && fr) addPoly(draftG, fr, S.tool === 'path' ? [...draft.pts, p] : entPts(makeEnt(S.tool, draft.pts[0], p)), 0xffe08a);
+  if (draft && fr) addPoly(draftG, fr, S.tool === 'path' ? [...draft.pts, p] : entPts(makeEnt(S.tool, draft.pts[0], p)), 0xe8590c);
   render();
 }
 async function enterSketch(id) { S.sketch = id; S.sel = id; S.pick = null; S.tool = 'path'; S.skSel = []; draft = null; await rebuild(); lookAtSketch(id); panels(); }
@@ -341,10 +359,12 @@ function hint() {
     : S.pick ? `Picking ${S.pick.kind} — click the model (click again to deselect), Esc when done. The model is shown as it was before this feature.`
     : S.sketch ? (S.tool === 'select' ? 'Select: click points or circles, then a constraint button · click empty space to clear' : S.tool === 'path' ? 'Path: click points · click the first point or Enter to close · Shift+Enter leaves it open (sweep path)' : `${S.tool}: click two points`) + ' · snap 1 mm (Shift 0.1, Alt off) · Esc exits'
     : isAsm() ? 'Insert part-studio bodies, then mate faces together · click an instance to edit it'
-    : S.face ? 'Face selected — Sketch will start on this face' : 'Left-drag orbit · right-drag pan · wheel zoom · click a face/edge to measure or select';
+    : S.face || S.plane ? 'Plane selected — Sketch will start on it' : 'Left-drag orbit · right-drag pan · wheel zoom · click a face/edge to measure or select';
 }
 
 // ---------- features ----------
+const ICON = { sketch: '✎', extrude: '⬆', revolve: '⟳', loft: '◭', sweep: '↝', coil: '➿', box: '◻', cylinder: '⬭', sphere: '●', cone: '▲', torus: '◎', hole: '⊙', fillet: '◜', chamfer: '◣', shell: '▢', draft: '◢', split: '⫽', transform: '✥', boolean: '◐', mirror: '⇋', linearPattern: '⋯', circularPattern: '❋', appearance: '◑', remove: '⌫', import: '⇩' };
+const pretty = (f) => f.name || (f.id.startsWith(f.type) && FEATURES[f.type] ? `${FEATURES[f.type].label} ${f.id.slice(f.type.length)}` : f.id);
 function addFeature(type) {
   const f = defaults(type), face = S.face;
   S.sketch = S.tool = S.pick = draft = null; clear(draftG);
@@ -355,6 +375,7 @@ function addFeature(type) {
     if (kind === 'body' && k !== 'target') f[k] = f.op === 'new' ? '' : face?.body.name || bodies[bodies.length - 1] || '';
   }
   if (type === 'sketch' && face?.group.type === 'PLANE') f.plane = { face: { body: face.body.name, point: r4(face.group.key) } };
+  else if (type === 'sketch' && S.plane) f.plane = S.plane;
   if (type === 'sweep') { const sk = before.filter((x) => x.type === 'sketch'); f.path = sk.find((s) => s.entities.some((e) => e.closed === false))?.id || ''; f.profile = sk.filter((s) => s.id !== f.path).pop()?.id || ''; }
   if (type === 'loft') f.sketches = before.filter((x) => x.type === 'sketch').slice(-2).map((s) => s.id);
   change(() => { F().splice(S.upTo ?? F().length, 0, f); if (S.upTo != null) S.upTo++; S.sel = f.id; });
@@ -426,7 +447,7 @@ function panels() {
     extra.move ? [h('button', { class: 'x', title: 'move up', onclick: (e) => { e.stopPropagation(); if (i) change(() => list.splice(i - 1, 0, list.splice(i, 1)[0])); } }, '↑'), h('button', { class: 'x', title: 'move down', onclick: (e) => { e.stopPropagation(); if (i < list.length - 1) change(() => list.splice(i + 1, 0, list.splice(i, 1)[0])); } }, '↓')] : null,
     'suppressed' in extra ? h('button', { class: 'x', title: 'suppress', onclick: (e) => { e.stopPropagation(); change(() => (x.suppressed = !x.suppressed)); } }, x.suppressed ? '○' : '●') : null,
     h('button', { class: 'x', title: 'delete', onclick: (e) => { e.stopPropagation(); change(() => { list.splice(i, 1); if (extra.del) extra.del(); fixState(); }); } }, '✕')); };
-  const bodies = [h('h3', {}, asm ? 'Parts' : 'Bodies'), (S.res?.bodies || []).map((b, i) => h('div', { class: 'item' + (S.hidden.has(b.name) ? ' off' : ''), title: `click to show/hide\nvolume ${fmt(b.volume)} mm³\narea ${fmt(b.area)} mm²\nmass ${fmt(b.mass)} g (density ${b.density} g/cm³)\ncenter of mass ${b.com.map(fmt).join(', ')}\nsize ${[0, 1, 2].map((k) => fmt(b.bbox[1][k] - b.bbox[0][k])).join(' × ')} mm`, onclick: () => { S.hidden.has(b.name) ? S.hidden.delete(b.name) : S.hidden.add(b.name); panels(); drawScene(); } },
+  const bodies = [h('h3', {}, `Parts (${S.res?.bodies.length || 0})`), (S.res?.bodies || []).map((b, i) => h('div', { class: 'item' + (S.hidden.has(b.name) ? ' off' : ''), title: `click to show/hide\nvolume ${fmt(b.volume)} mm³\narea ${fmt(b.area)} mm²\nmass ${fmt(b.mass)} g (density ${b.density} g/cm³)\ncenter of mass ${b.com.map(fmt).join(', ')}\nsize ${[0, 1, 2].map((k) => fmt(b.bbox[1][k] - b.bbox[0][k])).join(' × ')} mm`, onclick: () => { S.hidden.has(b.name) ? S.hidden.delete(b.name) : S.hidden.add(b.name); panels(); drawScene(); } },
     h('span', { class: 'sw', style: `background:${b.color || PALETTE[i % PALETTE.length]}` }), h('span', { class: 'nm' }, b.name), h('span', { class: 'ty' }, `${fmt(b.volume / 1000)} cm³ · ${fmt(b.mass)} g`)))];
   if (asm) {
     const a = cur();
@@ -434,8 +455,9 @@ function panels() {
       h('h3', {}, 'Mates'), a.mates.length ? a.mates.map((m) => item(m, m.id, `${m.k} · ${m.a.inst} ← ${m.b.inst}`, a.mates, { suppressed: 1, move: 1 })) : h('div', { style: 'color:var(--dim)' }, 'None — pick a mate type, then one face on each instance.'), bodies);
   } else {
     const n = F().length, upTo = S.upTo ?? n;
-    fill('left', params, h('h3', {}, 'Features'),
-      F().map((f, i) => item(f, f.name || f.id, FEATURES[f.type]?.label || f.type, F(), { suppressed: 1, move: 1, off: i >= upTo, dbl: () => f.type === 'sketch' && enterSketch(f.id) })),
+    fill('left', params, h('h3', {}, `Features (${n})`),
+      Object.entries(PLANES).map(([nm, [pl]]) => h('div', { class: 'item' + (S.plane === pl ? ' sel' : ''), title: 'select, then Sketch, to sketch on this plane', onclick: () => { S.plane = S.plane === pl ? null : pl; S.face = null; clear(selG); panels(); drawScene(); } }, h('span', { class: 'nm' }, '▱  ' + nm), h('span', { class: 'ty' }, 'plane'))),
+      F().map((f, i) => item(f, `${ICON[f.type] || '•'}  ${pretty(f)}`, f.id, F(), { suppressed: 1, move: 1, off: i >= upTo, dbl: () => f.type === 'sketch' && enterSketch(f.id) })),
       n ? h('div', { class: 'row', title: 'Rollback bar: rebuild only the first N features' }, h('label', {}, `Rollback ${upTo}/${n}`), h('input', { type: 'range', min: 0, max: n, value: upTo, onchange: (e) => { S.upTo = +e.target.value >= n ? null : +e.target.value; rebuild(); } })) : h('div', { style: 'color:var(--dim)' }, 'Empty — start with Sketch, or add a primitive from the ribbon.'), bodies);
   }
   // properties
@@ -455,9 +477,10 @@ function panels() {
     row('angle', numIn(it.angle, set(it, 'angle'))), typeof it.angle === 'number' ? row('', h('input', { type: 'range', min: -180, max: 180, value: it.angle, title: 'drag to rotate about the mate axis', onchange: (e) => set(it, 'angle')(+e.target.value) })) : null,
     row('offset', numIn(it.offset, set(it, 'offset'))), row('flip', h('input', { type: 'checkbox', checked: !!it.flip, onchange: (e) => set(it, 'flip')(e.target.checked) })),
     h('div', { class: 'help' }, 'The two picked faces are made coincident at their centroids, normals opposed; angle turns the moving part about that axis, offset slides it along it.')];
-  else props = [h('h3', {}, 'Properties'), h('div', { style: 'color:var(--dim)' }, asm ? 'Select an instance or mate to edit it.' : 'Select a feature to edit it. Any number accepts an expression using parameters, e.g. w/2 + 3.'),
+  else props = [h('h3', {}, 'Errors'),
     Object.entries(errs).map(([k, v]) => h('div', { class: 'errbox' }, h('b', {}, k + ': '), v))];
-  fill('right', props);
+  $('right').style.display = f || it || Object.keys(errs).length ? '' : 'none';
+  fill('right', f || it ? h('button', { class: 'dclose', title: 'Done', onclick: () => { S.sel = null; S.pick = null; if (S.sketch) exitSketch(); else { panels(); rebuild(); } } }, '✓') : null, props);
   ribbon(); tabs(); hint();
 }
 function dialog(title, body, actions = []) {
@@ -483,15 +506,16 @@ function menu() {
 }
 // Contextual ribbon: sketch tools while sketching, modelling tools in a part studio, insert/mate tools in an assembly.
 function ribbon() {
-  const tool = (t, label) => h('button', { class: S.tool === t ? 'on' : '', onclick: () => { S.tool = t; draft = null; clear(draftG); panels(); } }, label);
+  const TI = { path: '╱', rect: '▭', circle: '○', polygon: '⬡', slot: '⬭', select: '⬚' };
+  const tool = (t, label) => h('button', { class: S.tool === t ? 'on' : '', onclick: () => { S.tool = t; draft = null; clear(draftG); panels(); } }, h('i', {}, TI[t]), label);
   if (S.sketch) return fill('ribbon', G('Draw', tool('path', 'Line / Path'), tool('rect', 'Rectangle'), tool('circle', 'Circle'), tool('polygon', 'Polygon'), tool('slot', 'Slot')),
-    G(`Constrain${S.skSel.length ? ` (${S.skSel.length} selected)` : ''}`, tool('select', '⬚ Select'), Object.keys(CONS).map((k) => h('button', { title: 'needs ' + CONS[k], onclick: () => constrain(k) }, k[0].toUpperCase() + k.slice(1)))),
-    G('Sketch', h('button', { class: 'on', onclick: exitSketch }, '✓ Finish')));
+    G(`Constrain${S.skSel.length ? ` (${S.skSel.length} selected)` : ''}`, tool('select', 'Select'), Object.keys(CONS).map((k) => h('button', { title: 'needs ' + CONS[k], onclick: () => constrain(k) }, k[0].toUpperCase() + k.slice(1)))),
+    G('Sketch', h('button', { class: 'on', onclick: exitSketch }, h('i', {}, '✓'), 'Finish')));
   if (isAsm()) return fill('ribbon',
     G('Insert', S.doc.studios.map((s) => h('button', { title: 'insert every body of this part studio', onclick: () => change(() => { const i = { id: uid(cur().instances, 'inst'), studio: s.id, body: '', translate: [0, 0, 0], rotate: [0, 0, 0] }; cur().instances.push(i); S.sel = i.id; }) }, '＋ ' + s.name))),
     G('Mate', ['fasten', 'revolute', 'slider', 'cylindrical'].map((k) => h('button', { class: S.pick?.k === k ? 'on' : '', onclick: () => { S.pick = S.pick?.k === k ? null : { kind: 'mate', k }; clear(selG); panels(); render(); } }, k[0].toUpperCase() + k.slice(1)))));
   const groups = {};
-  for (const [t, f] of Object.entries(FEATURES)) (groups[f.group] ||= []).push(h('button', { class: t === 'sketch' ? 'on' : '', onclick: () => addFeature(t) }, f.label));
+  for (const [t, f] of Object.entries(FEATURES)) (groups[f.group] ||= []).push(h('button', { title: f.label, onclick: () => addFeature(t) }, h('i', {}, ICON[t] || '•'), f.label));
   fill('ribbon', Object.entries(groups).map(([g, b]) => G(g === 'Assembly' ? 'Body' : g, b)));
 }
 function aiPanel() {
