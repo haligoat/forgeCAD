@@ -7,7 +7,8 @@
     "start": "vite --open",
     "build": "vite build",
     "test": "node bin/forge.js eval examples/showcase.json",
-    "forge": "node bin/forge.js"
+    "forge": "node bin/forge.js",
+    "dev": "vite"
   },
   "keywords": [],
   "author": "",

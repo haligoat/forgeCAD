@@ -4,8 +4,6 @@ Open-source parametric CAD that runs entirely on your machine. A real B-rep kern
 
 No cloud, no account, no telemetry. The document is a plain JSON file you can diff and version with git.
 
-> Status: kernel, CLI and MCP server work today. The GUI is being built.
-
 ## Quick start
 
 ```bash
