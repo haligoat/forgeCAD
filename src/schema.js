@@ -1,6 +1,7 @@
 // Single source of truth for feature types: drives the UI forms, the kernel defaults and the AI docs.
 // Field kinds: num (number or expression string), vec ([x,y,z] of num), text, bool, select:a|b, body, bodies,
 // sketch, sketches, edges, faces (selectors), op, plane.
+import { CONSTRAINTS } from './solver.js';
 const OP = ['op', 'op', 'new', 'new = make a body, add = fuse into `body`, cut, intersect'];
 const BODY = ['body', 'body', '', 'target body name (for op=new: name of the new body)'];
 const AT = ['at', 'vec', [0, 0, 0], 'position'];
@@ -8,7 +9,7 @@ export const FEATURES = {
   sketch: { label: 'Sketch', group: 'Sketch', fields: [
     ['plane', 'plane', 'XY', '"XY" | "XZ" | "YZ" | {face:{body,point:[x,y,z]}} | {origin,normal,xDir}'],
     ['offset', 'num', 0, 'offset along plane normal'],
-    ['entities', 'entities', [], 'see SKETCH ENTITIES'] ] },
+    ['entities', 'entities', [], 'see SKETCH ENTITIES'], ['constraints', 'constraints', [], 'see SKETCH CONSTRAINTS'] ] },
   extrude: { label: 'Extrude', group: 'Create', fields: [['sketch', 'sketch', ''], ['distance', 'num', 10, 'negative flips direction'], OP, BODY,
     ['symmetric', 'bool', false], ['twist', 'num', 0, 'degrees'], ['taper', 'num', 1, 'end scale factor, 1 = straight']] },
   revolve: { label: 'Revolve', group: 'Create', fields: [['sketch', 'sketch', ''], ['axis', 'vec', [0, 0, 1], 'world axis direction'],
@@ -53,12 +54,28 @@ export function defaults(type) {
   for (const [k, , d] of FEATURES[type].fields) o[k] = structuredClone(d);
   return o;
 }
+// Upgrades any document to the current shape: {name, params, studios:[{id,name,features}], assemblies:[{id,name,instances,mates}]}.
+export function normalize(d) {
+  d.params ||= [];
+  if (!d.studios?.length) d.studios = [{ id: 'studio1', name: 'Part Studio 1', features: d.features || [] }];
+  delete d.features;
+  for (const s of d.studios) s.features ||= [];
+  d.assemblies ||= [];
+  for (const a of d.assemblies) { a.instances ||= []; a.mates ||= []; }
+  return d;
+}
+export const ASSEMBLIES = `ASSEMBLIES: {id,name,instances:[{id,studio,body?,translate:[x,y,z],rotate:[rx,ry,rz]}],mates:[...]}.
+ An instance places one body (or, with no body, every body) of a part studio. Mates run in order and move instance b onto instance a:
+ {id,k:"fasten"|"revolute"|"slider"|"cylindrical",a:{inst,point:[x,y,z]},b:{inst,point:[x,y,z]},angle:0,offset:0,flip:false}
+ point = a point on a (planar) face in that part studio's own coordinates; the mate connector sits at that face's centroid with z along its normal.
+ The two connectors are made coincident with normals opposed (flip:true = same direction), then rotated by angle about the normal and moved by offset along it.`;
 export function docs() {
-  let s = `forgeCAD document = JSON {name, params:[{name,expr}], features:[{id,type,name?,suppressed?,...fields}]}.
+  let s = `forgeCAD document = JSON {name, params:[{name,expr}], studios:[{id,name,features:[{id,type,name?,suppressed?,...fields}]}], assemblies:[...]}.
+(A legacy top-level "features" array is accepted and becomes the first part studio.) Params are shared by all studios and assemblies.
 Units mm / degrees. Features run top to bottom (parametric timeline). Any "num" may be an expression using params and Math (e.g. "w/2+sin(PI/4)").
 Selectors (edges/faces): "all" | {points:[[x,y,z],...]} (nearest edge midpoint / face mid-point) | {dir:"X"|"Y"|"Z"} (edges along axis) | {plane:"XY"|"XZ"|"YZ",offset} (lying in plane) | {parallel:"XY"} — keys combine with AND.
 FEATURES:\n`;
   for (const [t, f] of Object.entries(FEATURES))
     s += ` ${t}: ` + f.fields.map(([k, kind, d, h]) => `${k}<${kind}>=${JSON.stringify(d)}${h ? ' (' + h + ')' : ''}`).join('; ') + '\n';
-  return s + SKETCH_ENTITIES + '\n';
+  return s + SKETCH_ENTITIES + '\n' + CONSTRAINTS + '\n' + ASSEMBLIES + '\n';
 }

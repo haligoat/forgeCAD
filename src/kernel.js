@@ -1,6 +1,7 @@
 // Parametric B-rep kernel on OpenCascade (via replicad). Runs identically in a browser worker and in node.
 import * as R from 'replicad';
 import { FEATURES } from './schema.js';
+import { solve } from './solver.js';
 
 export function init(oc) { R.setOC(oc); }
 const V = (v) => [v.x, v.y, v.z];
@@ -24,10 +25,35 @@ function nearest(items, keyf, pts) {
 
 let last = { bodies: new Map() };
 
-export async function evaluate(doc, opts = {}) {
-  const t0 = Date.now();
-  const vals = {}, errors = {}, sketches = {}, skOut = {};
-  for (const p of doc.params || []) { try { vals[p.name] = evalExpr(p.expr, vals); } catch (e) { errors['param:' + p.name] = e.message; } }
+// ---- rigid 4x4 transforms (row-major) for assemblies ----
+const mul = (A, B) => A.map((r, i) => B[0].map((_, j) => r.reduce((s, _v, k) => s + A[i][k] * B[k][j], 0)));
+const trans = ([x, y, z]) => [[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, z], [0, 0, 0, 1]];
+const rotA = (ax, deg) => { const c = Math.cos((deg * Math.PI) / 180), s = Math.sin((deg * Math.PI) / 180); return ax === 0 ? [[1, 0, 0, 0], [0, c, -s, 0], [0, s, c, 0], [0, 0, 0, 1]] : ax === 1 ? [[c, 0, s, 0], [0, 1, 0, 0], [-s, 0, c, 0], [0, 0, 0, 1]] : [[c, -s, 0, 0], [s, c, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]; };
+const euler = ([x, y, z]) => mul(rotA(2, z), mul(rotA(1, y), rotA(0, x)));
+const inv = (M) => { const R = [0, 1, 2].map((i) => [0, 1, 2].map((j) => M[j][i])), t = R.map((r) => -(r[0] * M[0][3] + r[1] * M[1][3] + r[2] * M[2][3])); return [[...R[0], t[0]], [...R[1], t[1]], [...R[2], t[2]], [0, 0, 0, 1]]; };
+function applyM(shape, M) {
+  const ang = Math.acos(Math.max(-1, Math.min(1, (M[0][0] + M[1][1] + M[2][2] - 1) / 2)));
+  let s = shape.clone();
+  if (ang > 1e-9) {
+    let ax = [M[2][1] - M[1][2], M[0][2] - M[2][0], M[1][0] - M[0][1]], L = Math.hypot(...ax);
+    if (L < 1e-6) { const d = [M[0][0], M[1][1], M[2][2]], i = d.indexOf(Math.max(...d)), a = Math.sqrt((d[i] + 1) / 2); ax = [0, 1, 2].map((j) => (j === i ? a : M[i][j] / (2 * a))); L = Math.hypot(...ax); }
+    s = s.rotate((ang * 180) / Math.PI, [0, 0, 0], ax.map((c) => c / L));
+  }
+  return s.translate([M[0][3], M[1][3], M[2][3]]);
+}
+// Mate connector frame on a face: origin at the face centroid, z along its normal.
+function frame(I, pt) {
+  const faces = I.src.flatMap(([, b]) => b.shape.faces);
+  if (!faces.length) throw Error('instance has no faces');
+  const f = nearest(faces, fkey, [pt])[0], o = V(f.center), z = V(f.normalAt(f.center));
+  const a = z.map(Math.abs), e = [0, 0, 0]; e[a.indexOf(Math.min(...a))] = 1;
+  const dz = e[0] * z[0] + e[1] * z[1] + e[2] * z[2]; let x = e.map((c, i) => c - dz * z[i]); const L = Math.hypot(...x); x = x.map((c) => c / L);
+  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  return [[x[0], y[0], z[0], o[0]], [x[1], y[1], z[1], o[1]], [x[2], y[2], z[2], o[2]], [0, 0, 0, 1]];
+}
+
+async function runStudio(feats, vals, opts, errors, prefix = '') {
+  const sketches = {}, skOut = {};
   const n = (v) => evalExpr(v, vals);
   const v3 = (a, d) => (typeof a === 'string' && AX[a] ? AX[a] : (a || d).map(n));
   const bodies = new Map();
@@ -99,7 +125,10 @@ export async function evaluate(doc, opts = {}) {
     sketch(f) {
       const plane = planeOf(f);
       let drawing = null; const open = [], cuts = [];
-      for (const e of f.entities || []) {
+      const ents = resolveNums(f.entities || []), cons = (f.constraints || []).filter((c) => !c.suppressed);
+      const sv = cons.length ? solve(ents, f.entities, cons, n) : null;
+      if (sv && !sv.ok) errors[prefix + f.id] = `sketch constraints not satisfied (residual ${sv.residual.toExponential(2)}) — conflicting or over-constrained`;
+      for (const e of ents) {
         if (e.construction) continue;
         const d = entity(e);
         if (e.t === 'path' && e.closed === false) open.push(d);
@@ -108,7 +137,7 @@ export async function evaluate(doc, opts = {}) {
       }
       for (const c of cuts) if (drawing) drawing = drawing.cut(c);
       sketches[f.id] = { plane, drawing, open };
-      skOut[f.id] = { frame: { o: V(plane.origin), x: V(plane.xDir), y: V(plane.yDir), z: V(plane.zDir) }, entities: resolveNums(f.entities || []) };
+      skOut[f.id] = { frame: { o: V(plane.origin), x: V(plane.xDir), y: V(plane.yDir), z: V(plane.zDir) }, entities: ents, solve: sv };
     },
     extrude(f) {
       const d = n(f.distance), tw = n(f.twist || 0), tp = n(f.taper ?? 1), s = sk(f.sketch);
@@ -200,28 +229,73 @@ export async function evaluate(doc, opts = {}) {
     else { const t = get(f.target); if (t === name) throw Error('pattern target must differ from the tool body'); for (const c of [b.shape, ...copies]) combine(op, t, c); bodies.delete(name); }
   }
 
-  const feats = doc.features || [], upTo = opts.upTo ?? feats.length;
+  const upTo = opts.upTo ?? feats.length;
   for (let i = 0; i < Math.min(upTo, feats.length); i++) {
     const f = feats[i];
     if (f.suppressed) continue;
     try {
       if (!run[f.type]) throw Error(`unknown feature type "${f.type}" (valid: ${Object.keys(FEATURES).join(', ')})`);
       await run[f.type](f);
-    } catch (e) { errors[f.id] = String(e?.message || e).slice(0, 300) || 'kernel error'; }
+    } catch (e) { errors[prefix + f.id] = String(e?.message || e).slice(0, 300) || 'kernel error'; }
   }
-  last = { bodies, doc };
+  return { bodies, skOut };
+}
+
+// Assembly: instances of part-studio bodies, positioned by a base transform then by mates (in order; mate.b moves onto mate.a).
+async function runAssembly(studios, asm, vals, opts, errors) {
+  const n = (v) => evalExpr(v, vals), v3 = (a) => (a || [0, 0, 0]).map(n), cache = new Map(), inst = {}, bodies = new Map();
+  const studio = async (id) => {
+    if (!cache.has(id)) { const s = studios.find((x) => x.id === id); if (!s) throw Error(`part studio "${id}" not found`); cache.set(id, (await runStudio(s.features || [], vals, { readFile: opts.readFile }, errors, id + '/')).bodies); }
+    return cache.get(id);
+  };
+  for (const i of asm.instances || []) {
+    try {
+      const sb = await studio(i.studio), names = i.body ? [i.body] : [...sb.keys()];
+      if (!names.length) throw Error(`part studio "${i.studio}" has no bodies`);
+      for (const nm of names) if (!sb.has(nm)) throw Error(`body "${nm}" not in part studio "${i.studio}" (have: ${[...sb.keys()].join(', ')})`);
+      inst[i.id] = { src: names.map((nm) => [nm, sb.get(nm)]), M: mul(trans(v3(i.translate)), euler(v3(i.rotate))) };
+    } catch (e) { errors[i.id] = String(e?.message || e); }
+  }
+  for (const m of asm.mates || []) {
+    if (m.suppressed) continue;
+    try {
+      const A = inst[m.a?.inst], B = inst[m.b?.inst];
+      if (!A || !B || A === B) throw Error('a mate needs two different, valid instances');
+      const J = mul(mul(rotA(2, n(m.angle || 0)), trans([0, 0, n(m.offset || 0)])), m.flip ? trans([0, 0, 0]) : rotA(0, 180));
+      B.M = mul(mul(mul(A.M, frame(A, m.a.point.map(n))), J), inv(frame(B, m.b.point.map(n))));
+    } catch (e) { errors[m.id] = String(e?.message || e); }
+  }
+  for (const [id, i] of Object.entries(inst)) for (const [nm, b] of i.src) bodies.set(i.src.length > 1 ? `${id}/${nm}` : id, { ...b, shape: applyM(b.shape, i.M), inst: id });
+  return { bodies, instances: Object.fromEntries(Object.entries(inst).map(([k, v]) => [k, v.M])), studioBodies: Object.fromEntries([...cache].map(([k, v]) => [k, [...v.keys()]])) };
+}
+
+// opts: {studio: id} (default: first studio) or {assembly: id}; upTo, mesh, readFile.
+export async function evaluate(doc, opts = {}) {
+  const t0 = Date.now(), vals = {}, errors = {};
+  for (const p of doc.params || []) { try { vals[p.name] = evalExpr(p.expr, vals); } catch (e) { errors['param:' + p.name] = e.message; } }
+  const studios = doc.studios || [{ id: 'studio1', features: doc.features || [] }];
+  let bodies, skOut = {}, extra = {};
+  if (opts.assembly) {
+    const asm = (doc.assemblies || []).find((a) => a.id === opts.assembly);
+    if (!asm) throw Error(`assembly "${opts.assembly}" not found`);
+    ({ bodies, ...extra } = await runAssembly(studios, asm, vals, opts, errors));
+  } else {
+    const st = studios.find((s) => s.id === opts.studio) || studios[0];
+    ({ bodies, skOut } = await runStudio(st.features || [], vals, opts, errors));
+  }
+  last = { bodies };
   const out = [];
   for (const [name, b] of bodies) {
     try { out.push(describe(name, b, opts.mesh !== false)); } catch (e) { errors['body:' + name] = 'tessellation failed: ' + e.message; }
   }
-  return { bodies: out, sketches: skOut, errors, params: vals, ms: Date.now() - t0 };
+  return { bodies: out, sketches: skOut, errors, params: vals, ms: Date.now() - t0, ...extra };
 }
 
 function describe(name, b, withMesh) {
   const s = b.shape, bb = s.boundingBox.bounds;
   let volume = 0, area = 0, com = [0, 0, 0];
   try { volume = R.measureVolume(s); area = R.measureArea(s); com = R.measureShapeVolumeProperties(s).centerOfMass; } catch {}
-  const o = { name, color: b.color, opacity: b.opacity ?? 1, hidden: !!b.hidden, density: b.density ?? 1, volume, area, com, mass: (volume / 1000) * (b.density ?? 1), bbox: bb, faces: s.faces.length, edges: s.edges.length };
+  const o = { name, inst: b.inst, color: b.color, opacity: b.opacity ?? 1, hidden: !!b.hidden, density: b.density ?? 1, volume, area, com, mass: (volume / 1000) * (b.density ?? 1), bbox: bb, faces: s.faces.length, edges: s.edges.length };
   if (!withMesh) return o;
   const m = s.mesh({ tolerance: 0.05, angularTolerance: 0.25 }), em = s.meshEdges({ tolerance: 0.05, angularTolerance: 0.25 });
   const fById = new Map(s.faces.map((f) => [f.hashCode, f])), eById = new Map(s.edges.map((e) => [e.hashCode, e]));

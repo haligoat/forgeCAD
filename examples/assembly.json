@@ -1,0 +1,11 @@
+{"name":"assembly-demo","params":[{"name":"L","expr":"40"}],
+"studios":[
+{"id":"plate","name":"Plate","features":[
+{"id":"s1","type":"sketch","plane":"XY","entities":[{"t":"path","start":[0,0],"closed":true,"segs":[{"to":[38,2]},{"to":[41,22]},{"to":[1,19]}]}],
+ "constraints":[{"k":"fix","a":[0,0],"x":0,"y":0},{"k":"horizontal","a":[0,0],"b":[0,1]},{"k":"vertical","a":[0,1],"b":[0,2]},{"k":"horizontal","a":[0,2],"b":[0,3]},{"k":"vertical","a":[0,3],"b":[0,0]},{"k":"distance","a":[0,0],"b":[0,1],"v":"L"},{"k":"distance","a":[0,1],"b":[0,2],"v":20}]},
+{"id":"e1","type":"extrude","sketch":"s1","distance":5,"op":"new","body":"plate"},
+{"id":"s2","type":"sketch","plane":{"face":{"body":"plate","point":[20,10,5]}},"entities":[{"t":"circle","cx":0,"cy":0,"r":4}]},
+{"id":"e2","type":"extrude","sketch":"s2","distance":8,"op":"add","body":"plate"}]},
+{"id":"pin","name":"Pin","features":[{"id":"c1","type":"cylinder","r":4,"h":20,"op":"new","body":"pin"}]}],
+"assemblies":[{"id":"asm","name":"Assembly 1","instances":[{"id":"base","studio":"plate"},{"id":"peg","studio":"pin","translate":[100,0,0]}],
+"mates":[{"id":"m1","k":"revolute","a":{"inst":"base","point":[20,10,0]},"b":{"inst":"peg","point":[0,0,0]},"angle":30,"offset":0}]}]}

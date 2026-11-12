@@ -41,7 +41,7 @@ node bin/forge.js export model.json out.step           # or .stl / .svg
 
 Tools: `schema`, `get_document`, `evaluate`, `add_feature`, `update_feature`, `remove_feature`, `set_param`, `set_document`, `export`. Every edit returns the rebuilt model's errors and mass properties, so an agent gets feedback on each step. The GUI live-reloads the same file.
 
-## Not there yet
+## Not there yet 
 
 Honest list: no geometric sketch constraint solver (dimensions are driven by parameters and expressions instead), no assembly mates / joints, no sheet metal, CAM, simulation, surfacing tools or dimensioned drawings. Contributions welcome.
 
